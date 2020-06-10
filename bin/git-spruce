@@ -1,0 +1,73 @@
+#!/usr/bin/env python
+from __future__ import absolute_import
+
+import getpass
+import subprocess
+import sys
+
+import click
+
+from spruce.git import find_branch_to_update, get_branch_name, extract_prefix, get_branch_by_commit
+
+@click.group()
+def cli():
+    pass
+
+
+@cli.command()
+def update_branch():
+    branch = find_branch_to_update()
+    if branch is None:
+        print "No branch found for commit. Leaving alone."
+        return
+    old_head = subprocess.check_output(["git", "rev-parse", branch]).strip()
+    new_head = subprocess.check_output(["git", "rev-parse", "HEAD"]).strip()
+    print "Re-writing {} to {} (previously {})".format(branch, new_head, old_head)
+    subprocess.check_call(["git", "branch", "-f", branch, new_head])
+    # TODO: Would be nice if `git rebase --abort` undid these changes...
+
+
+@cli.command()
+@click.argument("merge_base", required=False)
+def rebase(merge_base=None):
+    if merge_base is None:
+        merge_base = subprocess.check_output(["git", "merge-base", "HEAD", "origin/dev"]).strip()
+    update_cmd = "{} {}".format(sys.argv[0], "update-branch")
+    # Swallow stack trace if the following errors.
+    subprocess.check_call(["git", "rebase", "-i", merge_base, "-x", update_cmd])
+    # Maybe assert tha all get_branch_by_commit branches are found on the current branch
+
+
+@cli.command()
+def push():
+    current_branch = get_branch_name()
+    prefix = extract_prefix(current_branch)
+    branch_mapping, keylen = get_branch_by_commit(prefix)
+    branches = sorted(branch_mapping.values())
+    subprocess.check_call(["git", "push", "origin", "-f", "--no-verify"] + branches)
+    # TODO: Follow up command to detect which commits don't have PRs yet and push them.
+
+
+# TODO: Command to update parent branch when a PR is merged
+@cli.command()
+@click.argument("name")
+def feature(name):
+    subprocess.check_call(["git", "checkout", "origin/dev", "-b", "{}/head".format(name)])
+
+
+@cli.command()
+def sprout():
+    current_branch = get_branch_name()
+    prefix = extract_prefix(current_branch)
+    branch_mapping, keylen = get_branch_by_commit(prefix)
+    try:
+        suffix = sorted([int(branch[len(prefix):]) for branch in branch_mapping.values()])[-1] + 1
+    except (KeyError, IndexError):
+        suffix = 1
+    new_branch = "{}{}".format(prefix, suffix)
+    subprocess.check_call(["git", "branch", new_branch, "HEAD"])
+
+
+if __name__ == "__main__":
+    cli()
+
